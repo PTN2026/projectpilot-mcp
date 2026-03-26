@@ -33,12 +33,30 @@ async function validateToken(authHeader: string | undefined): Promise<string | n
   return data.user_id
 }
 
+// ─── JIRA HELPER ─────────────────────────────────────────────────────────────
+
+async function jiraRequest(path: string, jiraDomain: string, jiraEmail: string, jiraToken: string) {
+  const url = `https://${jiraDomain}/rest/api/3/${path}`
+  const auth = Buffer.from(`${jiraEmail}:${jiraToken}`).toString('base64')
+  const res = await fetch(url, {
+    headers: {
+      'Authorization': `Basic ${auth}`,
+      'Accept': 'application/json',
+    }
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Jira API error ${res.status}: ${text}`)
+  }
+  return res.json()
+}
+
 // ─── SERVER FACTORY ───────────────────────────────────────────────────────────
 
 function createServer(userId: string) {
   const server = new McpServer({
     name: 'projectpilot',
-    version: '1.0.0',
+    version: '1.1.0',
     description: 'ProjectPilot MCP Server — AI project intelligence connector for Claude'
   })
 
@@ -204,6 +222,191 @@ function createServer(userId: string) {
     }
   )
 
+  // ─── JIRA TOOLS ─────────────────────────────────────────────────────────────
+
+  server.tool(
+    'get_jira_issues',
+    'Get issues from a Jira project. Requires jira_domain, jira_email, jira_token, and project_key.',
+    {
+      jira_domain: z.string().describe('Your Jira domain e.g. mycompany.atlassian.net'),
+      jira_email: z.string().describe('Your Atlassian account email'),
+      jira_token: z.string().describe('Your Jira API token'),
+      project_key: z.string().describe('Jira project key e.g. PT'),
+      status: z.string().optional().describe('Filter by status e.g. "In Progress", "To Do", "Done"'),
+      max_results: z.number().optional().describe('Max number of issues to return (default 20)')
+    },
+    { title: 'Get Jira Issues', readOnlyHint: true, destructiveHint: false },
+    async ({ jira_domain, jira_email, jira_token, project_key, status, max_results }) => {
+      try {
+        let jql = `project = ${project_key} ORDER BY updated DESC`
+        if (status) jql = `project = ${project_key} AND status = "${status}" ORDER BY updated DESC`
+        const maxR = max_results ?? 20
+        const data = await jiraRequest(
+          `search?jql=${encodeURIComponent(jql)}&maxResults=${maxR}&fields=summary,status,assignee,priority,issuetype,created,updated,description`,
+          jira_domain, jira_email, jira_token
+        )
+        const issues = (data.issues ?? []).map((issue: any) => ({
+          key: issue.key,
+          summary: issue.fields.summary,
+          status: issue.fields.status?.name,
+          assignee: issue.fields.assignee?.displayName ?? 'Unassigned',
+          priority: issue.fields.priority?.name,
+          type: issue.fields.issuetype?.name,
+          updated: issue.fields.updated,
+        }))
+        return { content: [{ type: 'text', text: JSON.stringify({ total: data.total, issues }, null, 2) }] }
+      } catch (err: any) {
+        return { content: [{ type: 'text', text: `Error fetching Jira issues: ${err.message}` }] }
+      }
+    }
+  )
+
+  server.tool(
+    'get_jira_sprint',
+    'Get the current active sprint and its issues for a Jira board.',
+    {
+      jira_domain: z.string().describe('Your Jira domain e.g. mycompany.atlassian.net'),
+      jira_email: z.string().describe('Your Atlassian account email'),
+      jira_token: z.string().describe('Your Jira API token'),
+      project_key: z.string().describe('Jira project key e.g. PT'),
+    },
+    { title: 'Get Jira Sprint', readOnlyHint: true, destructiveHint: false },
+    async ({ jira_domain, jira_email, jira_token, project_key }) => {
+      try {
+        // Get active sprint issues via JQL
+        const jql = `project = ${project_key} AND sprint in openSprints() ORDER BY status ASC`
+        const data = await jiraRequest(
+          `search?jql=${encodeURIComponent(jql)}&maxResults=50&fields=summary,status,assignee,priority,issuetype`,
+          jira_domain, jira_email, jira_token
+        )
+        const issues = (data.issues ?? []).map((issue: any) => ({
+          key: issue.key,
+          summary: issue.fields.summary,
+          status: issue.fields.status?.name,
+          assignee: issue.fields.assignee?.displayName ?? 'Unassigned',
+          priority: issue.fields.priority?.name,
+          type: issue.fields.issuetype?.name,
+        }))
+
+        // Summarize by status
+        const byStatus: Record<string, number> = {}
+        issues.forEach((i: any) => {
+          byStatus[i.status] = (byStatus[i.status] ?? 0) + 1
+        })
+
+        return {
+          content: [{
+            type: 'text', text: JSON.stringify({
+              total_issues: data.total,
+              by_status: byStatus,
+              issues
+            }, null, 2)
+          }]
+        }
+      } catch (err: any) {
+        return { content: [{ type: 'text', text: `Error fetching Jira sprint: ${err.message}` }] }
+      }
+    }
+  )
+
+  server.tool(
+    'get_jira_blockers',
+    'Get blocked or high-priority in-progress issues from Jira that need attention.',
+    {
+      jira_domain: z.string().describe('Your Jira domain e.g. mycompany.atlassian.net'),
+      jira_email: z.string().describe('Your Atlassian account email'),
+      jira_token: z.string().describe('Your Jira API token'),
+      project_key: z.string().describe('Jira project key e.g. PT'),
+    },
+    { title: 'Get Jira Blockers', readOnlyHint: true, destructiveHint: false },
+    async ({ jira_domain, jira_email, jira_token, project_key }) => {
+      try {
+        const jql = `project = ${project_key} AND status = "In Progress" AND priority in (High, Critical) ORDER BY priority DESC`
+        const data = await jiraRequest(
+          `search?jql=${encodeURIComponent(jql)}&maxResults=20&fields=summary,status,assignee,priority,issuetype,updated`,
+          jira_domain, jira_email, jira_token
+        )
+        const issues = (data.issues ?? []).map((issue: any) => ({
+          key: issue.key,
+          summary: issue.fields.summary,
+          status: issue.fields.status?.name,
+          assignee: issue.fields.assignee?.displayName ?? 'Unassigned',
+          priority: issue.fields.priority?.name,
+          type: issue.fields.issuetype?.name,
+          updated: issue.fields.updated,
+        }))
+        return { content: [{ type: 'text', text: JSON.stringify({ total_blockers: data.total, issues }, null, 2) }] }
+      } catch (err: any) {
+        return { content: [{ type: 'text', text: `Error fetching Jira blockers: ${err.message}` }] }
+      }
+    }
+  )
+
+  server.tool(
+    'sync_jira_to_project',
+    'Pull Jira issues into a ProjectPilot project as blockers/issues. Syncs In Progress and high priority items.',
+    {
+      project_id: z.string().describe('The ProjectPilot project ID'),
+      jira_domain: z.string().describe('Your Jira domain e.g. mycompany.atlassian.net'),
+      jira_email: z.string().describe('Your Atlassian account email'),
+      jira_token: z.string().describe('Your Jira API token'),
+      project_key: z.string().describe('Jira project key e.g. PT'),
+    },
+    { title: 'Sync Jira to Project', readOnlyHint: false, destructiveHint: false },
+    async ({ project_id, jira_domain, jira_email, jira_token, project_key }) => {
+      try {
+        // Fetch in-progress issues from Jira
+        const jql = `project = ${project_key} AND status = "In Progress" ORDER BY updated DESC`
+        const data = await jiraRequest(
+          `search?jql=${encodeURIComponent(jql)}&maxResults=20&fields=summary,status,assignee,priority,issuetype`,
+          jira_domain, jira_email, jira_token
+        )
+
+        const issues = data.issues ?? []
+        let synced = 0
+
+        for (const issue of issues) {
+          const title = `[${issue.key}] ${issue.fields.summary}`
+          const severity = issue.fields.priority?.name === 'Critical' ? 'Critical'
+            : issue.fields.priority?.name === 'High' ? 'High'
+            : 'Medium'
+          const owner = issue.fields.assignee?.displayName ?? 'Unassigned'
+
+          // Check if already synced
+          const { data: existing } = await supabase
+            .from('issues')
+            .select('id')
+            .eq('project_id', project_id)
+            .eq('title', title)
+            .single()
+
+          if (!existing) {
+            await supabase.from('issues').insert({
+              project_id,
+              user_id: userId,
+              title,
+              severity,
+              owner,
+              status: 'In Progress',
+              description: `Synced from Jira ${issue.key}`,
+              date_logged: new Date().toISOString().split('T')[0]
+            })
+            synced++
+          }
+        }
+
+        return {
+          content: [{
+            type: 'text',
+            text: `✅ Synced ${synced} new issues from Jira project ${project_key} into ProjectPilot. ${issues.length - synced} were already logged.`
+          }]
+        }
+      } catch (err: any) {
+        return { content: [{ type: 'text', text: `Error syncing Jira: ${err.message}` }] }
+      }
+    }
+  )
+
   return server
 }
 
@@ -286,7 +489,7 @@ app.post('/messages', async (req, res) => {
 // ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
 
 app.get('/health', (_, res) => {
-  res.json({ status: 'ok', service: 'ProjectPilot MCP Server', version: '1.0.0' })
+  res.json({ status: 'ok', service: 'ProjectPilot MCP Server', version: '1.1.0' })
 })
 
 // ─── OAUTH METADATA (required for directory) ──────────────────────────────────
