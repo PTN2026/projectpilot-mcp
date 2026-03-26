@@ -35,7 +35,7 @@ async function validateToken(authHeader: string | undefined): Promise<string | n
 
 // ─── JIRA HELPER ─────────────────────────────────────────────────────────────
 
-async function jiraRequest(path: string, jiraDomain: string, jiraEmail: string, jiraToken: string) {
+async function jiraRequest(path: string, jiraDomain: string, jiraEmail: string, jiraToken: string): Promise<any> {
   const url = `https://${jiraDomain}/rest/api/3/${path}`
   const auth = Buffer.from(`${jiraEmail}:${jiraToken}`).toString('base64')
   const res = await fetch(url, {
