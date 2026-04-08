@@ -496,7 +496,7 @@ app.get('/health', (_, res) => {
 
 app.get('/.well-known/oauth-authorization-server', (_, res) => {
   res.json({
-    issuer: 'https://myprojectpilot.io',
+    issuer: 'https://mcp.myprojectpilot.io',
     authorization_endpoint: 'https://myprojectpilot.io/api/mcp/authorize',
     token_endpoint: 'https://myprojectpilot.io/api/mcp/token',
     response_types_supported: ['code'],
