@@ -493,7 +493,12 @@ app.get('/health', (_, res) => {
 })
 
 // ─── OAUTH METADATA (required for directory) ──────────────────────────────────
-
+app.get('/.well-known/oauth-protected-resource', (_, res) => {
+  res.json({
+    resource: 'https://mcp.myprojectpilot.io',
+    authorization_servers: ['https://mcp.myprojectpilot.io']
+  })
+})
 app.get('/.well-known/oauth-authorization-server', (_, res) => {
   res.json({
     issuer: 'https://mcp.myprojectpilot.io',
