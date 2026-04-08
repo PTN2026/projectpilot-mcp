@@ -499,6 +499,12 @@ app.get('/.well-known/oauth-protected-resource', (_, res) => {
     authorization_servers: ['https://mcp.myprojectpilot.io']
   })
 })
+app.get('/.well-known/oauth-protected-resource/mcp', (_, res) => {
+  res.json({
+    resource: 'https://mcp.myprojectpilot.io/mcp',
+    authorization_servers: ['https://mcp.myprojectpilot.io']
+  })
+})
 app.get('/.well-known/oauth-authorization-server', (_, res) => {
   res.json({
     issuer: 'https://mcp.myprojectpilot.io',
