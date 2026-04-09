@@ -431,6 +431,7 @@ const streamableSessions: Record<string, StreamableHTTPServerTransport> = {}
 app.all('/mcp', async (req, res) => {
   const userId = await validateToken(req.headers.authorization)
   if (!userId) {
+   res.setHeader('WWW-Authenticate', 'Bearer realm="ProjectPilot", resource_metadata="https://mcp.myprojectpilot.io/.well-known/oauth-protected-resource/mcp"')
     res.status(401).json({ error: 'unauthorized', error_description: 'Valid Bearer token required' })
     return
   }
@@ -468,6 +469,7 @@ const sseTransports: Record<string, SSEServerTransport> = {}
 app.get('/sse', async (req, res) => {
   const userId = await validateToken(req.headers.authorization)
   if (!userId) {
+   res.setHeader('WWW-Authenticate', 'Bearer realm="ProjectPilot", resource_metadata="https://mcp.myprojectpilot.io/.well-known/oauth-protected-resource/mcp"')
     res.status(401).json({ error: 'unauthorized', error_description: 'Valid Bearer token required' })
     return
   }
